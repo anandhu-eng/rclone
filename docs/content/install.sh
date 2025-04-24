@@ -9,27 +9,42 @@
 
 set -e
 
-#when adding a tool to the list make sure to also add its corresponding command further in the script
+# When adding a tool to the list, make sure to also add its corresponding command further in the script
 unzip_tools_list=('unzip' '7z' 'busybox')
 
-usage() { echo "Usage: sudo -v ; curl https://rclone.org/install.sh | sudo bash [-s beta]" 1>&2; exit 1; }
+usage() { echo "Usage: sudo -v ; curl https://rclone.org/install.sh | sudo bash [-s beta] [--version VERSION] [--force]" 1>&2; exit 1; }
 
-#check for beta flag
-if [ -n "$1" ] && [ "$1" != "beta" ]; then
-    usage
-fi
+# Check for flags
+install_beta=""
+custom_version=""
+force_flag=""
 
-if [ -n "$1" ]; then
-    install_beta="beta "
-fi
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --beta)
+            install_beta="beta "
+            shift
+            ;;
+        --version)
+            custom_version="$2"
+            shift 2
+            ;;
+        --force)
+            force_flag="--force"
+            shift
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
 
-
-#create tmp directory and move to it with macOS compatibility fallback
+# Create temp directory and move to it with macOS compatibility fallback
 tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'rclone-install.XXXXXXXXXX')
 cd "$tmp_dir"
 
-
-#make sure unzip tool is available and choose one to work with
+# Make sure unzip tool is available and choose one to work with
 set +e
 for tool in ${unzip_tools_list[*]}; do
     trash=$(hash "$tool" 2>>errors)
@@ -40,7 +55,7 @@ for tool in ${unzip_tools_list[*]}; do
 done  
 set -e
 
-# exit if no unzip tools available
+# Exit if no unzip tools available
 if [ -z "$unzip_tool" ]; then
     printf "\nNone of the supported tools for extracting zip archives (${unzip_tools_list[*]}) were found. "
     printf "Please install one of them and try again.\n\n"
@@ -50,21 +65,25 @@ fi
 # Make sure we don't create a root owned .config/rclone directory #2127
 export XDG_CONFIG_HOME=config
 
-#check installed version of rclone to determine if update is necessary
+# Check installed version of rclone to determine if update is necessary
 version=$(rclone --version 2>>errors | head -n 1)
-if [ -z "$install_beta" ]; then
-    current_version=$(curl -fsS https://downloads.rclone.org/version.txt)
+if [ -z "$custom_version" ]; then
+    if [ -z "$install_beta" ]; then
+        current_version=$(curl -fsS https://downloads.rclone.org/version.txt)
+    else
+        current_version=$(curl -fsS https://beta.rclone.org/version.txt)
+    fi
 else
-    current_version=$(curl -fsS https://beta.rclone.org/version.txt)
+    current_version="$custom_version"
 fi
 
-if [ "$version" = "$current_version" ]; then
+# Check if the version is already up to date
+if [ "$version" = "$current_version" ] && [ -z "$force_flag" ]; then
     printf "\nThe latest ${install_beta}version of rclone ${version} is already installed.\n\n"
     exit 3
 fi
 
-
-#detect the platform
+# Detect the platform
 OS="$(uname)"
 case $OS in
   Linux)
@@ -121,19 +140,19 @@ case "$OS_type" in
     ;;
 esac
 
-
-#download and unzip
+# Download and unzip
 if [ -z "$install_beta" ]; then
-    download_link="https://downloads.rclone.org/rclone-current-${OS}-${OS_type}.zip"
-    rclone_zip="rclone-current-${OS}-${OS_type}.zip"
+    download_link="https://downloads.rclone.org/rclone-${current_version}-${OS}-${OS_type}.zip"
+    rclone_zip="rclone-${current_version}-${OS}-${OS_type}.zip"
 else
-    download_link="https://beta.rclone.org/rclone-beta-latest-${OS}-${OS_type}.zip"
-    rclone_zip="rclone-beta-latest-${OS}-${OS_type}.zip"
+    download_link="https://beta.rclone.org/rclone-${current_version}-${OS}-${OS_type}.zip"
+    rclone_zip="rclone-${current_version}-${OS}-${OS_type}.zip"
 fi
 
 curl -OfsS "$download_link"
 unzip_dir="tmp_unzip_dir_for_rclone"
-# there should be an entry in this switch for each element of unzip_tools_list
+
+# Unzip with the selected tool
 case "$unzip_tool" in
   'unzip')
     unzip -a "$rclone_zip" -d "$unzip_dir"
@@ -149,16 +168,15 @@ esac
 
 cd $unzip_dir/*
 
-#mounting rclone to environment
-
+# Mounting rclone to environment
 case "$OS" in
   'linux')
-    #binary
+    # Binary
     cp rclone /usr/bin/rclone.new
     chmod 755 /usr/bin/rclone.new
     chown root:root /usr/bin/rclone.new
     mv /usr/bin/rclone.new /usr/bin/rclone
-    #manual
+    # Manual
     if ! [ -x "$(command -v mandb)" ]; then
         echo 'mandb not found. The rclone man docs will not be installed.'
     else 
@@ -168,22 +186,22 @@ case "$OS" in
     fi
     ;;
   'freebsd'|'openbsd'|'netbsd')
-    #binary
+    # Binary
     cp rclone /usr/bin/rclone.new
     chown root:wheel /usr/bin/rclone.new
     mv /usr/bin/rclone.new /usr/bin/rclone
-    #manual
+    # Manual
     mkdir -p /usr/local/man/man1
     cp rclone.1 /usr/local/man/man1/
     makewhatis
     ;;
   'osx')
-    #binary
+    # Binary
     mkdir -m 0555 -p ${binTgtDir}
     cp rclone ${binTgtDir}/rclone.new
     mv ${binTgtDir}/rclone.new ${binTgtDir}/rclone
     chmod a=x ${binTgtDir}/rclone
-    #manual
+    # Manual
     mkdir -m 0555 -p ${man1TgtDir}
     cp rclone.1 ${man1TgtDir}    
     chmod a=r ${man1TgtDir}/rclone.1
@@ -193,10 +211,10 @@ case "$OS" in
     exit 2
 esac
 
-#update version variable post install
+# Update version variable post-install
 version=$(rclone --version 2>>errors | head -n 1)
 
-#cleanup
+# Cleanup
 rm -rf "$tmp_dir"
 
 printf "\n${version} has successfully installed."
